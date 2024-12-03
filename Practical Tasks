@@ -1,0 +1,164 @@
+Docker - Practical task 1
+**Create Dockerfile for Spring-petclinic application using pre-built artifact**
+**Build application outside of container**
+
+mvn clean install
+
+java -jar target/spring-petclinic-4.1.0-SNAPSHOT.jar
+
+**Copy artifact from target folder into image and make it work inside container**
+
+**Dockerfile**
+FROM openjdk:11
+WORKDIR /app
+COPY target/spring-petclinic-4.1.0-SNAPSHOT.jar /app/spring-petclinic.jar
+EXPOSE 8080
+ENTRYPOINT ["java", "-jar", "/app/spring-petclinic.jar"]
+
+**Build image**
+
+docker build -t spring-petclinic .
+
+**Docker run**
+
+docker run -p 8080:8080 spring-petclinic
+
+**Create multi-stage Dockerfile for Spring-petclinic application
+Application should be built as part of first stage
+Final image should contain only required files and based on minimal possible base image**
+
+Dockerfile
+
+FROM maven:3.8.4-openjdk-17-slim AS build
+WORKDIR /app 
+COPY pom.xml . 
+COPY src ./src
+RUN mvn clean package -DskipTests
+FROM openjdk:17-jdk-slim AS runtime
+WORKDIR /app
+COPY --from=build /app/target/spring-petclinic.jar /app/spring-petclinic.jar 
+EXPOSE 8080
+ENTRYPOINT ["java", "-jar", "/app/spring-petclinic.jar"]
+Multi-stage Dockerfile
+Stage 1: Build the Application
+Base Image:
+FROM maven:3.8.6-openjdk-17-slim as build: This is a Maven image that also includes JDK 17. It will be used to build the application.
+Working Directory:
+WORKDIR /app: This sets the working directory inside the container to /app.
+Copy Project Files:
+COPY pom.xml .: Copies the pom.xml file to the container.
+COPY src ./src: Copies the source code from our local machine into the container.
+Build the Application:
+RUN mvn clean package -DskipTests: Runs Maven to build and package the application, skipping the tests for faster builds. The spring-petclinic-4.1.0-SNAPSHOT.jar file will be created in the target/ directory.
+Stage 2: Runtime Environment
+Base Image:
+FROM openjdk:17-jdk-slim as runtime: This is a minimal JDK 17 image (a slim version) that will be used as the runtime environment for the application.
+Working Directory:
+WORKDIR /app: Sets the working directory to /app in the container.
+Copy the Built JAR:
+COPY --from=build /app/target/spring-petclinic-4.1.0-SNAPSHOT.jar /app/spring-petclinic.jar: This copies the final spring-petclinic-4.1.0-SNAPSHOT.jar from the build stage into the /app directory in the runtime image.
+Expose the Port:
+EXPOSE 8080: Exposes port 8080 on the container, which is the default port for the Spring Boot application.
+Define the Entry Point:
+ENTRYPOINT ["java", "-jar", "/app/spring-petclinic.jar"]: This specifies the command to run the application when the container starts.
+
+Build the Docker image:
+docker build -t spring-petclinic .
+
+Run the container:
+docker run -p 8080:8080 spring-petclinic
+
+
+**Create docker-compose configuration that will automatically start multiple containers
+Run two containers: application + DB
+Provide credentials as environment variables, so DB image can be configured with custom credentials and application can connect to DB automatically**
+
+docker-compose.yml
+services:
+  mysql:
+    image: mysql:9.1
+    ports:
+      - "3306:3306"
+    environment:
+      - MYSQL_ROOT_PASSWORD=rootpassword
+      - MYSQL_ALLOW_EMPTY_PASSWORD=true
+      - MYSQL_USER=petclinic
+      - MYSQL_PASSWORD=petclinic
+      - MYSQL_DATABASE=petclinic
+    volumes:
+      - "./conf.d:/etc/mysql/conf.d:ro"
+    profiles:
+      - mysql
+  postgres:
+    image: postgres:17.0
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_PASSWORD=petclinic
+      - POSTGRES_USER=petclinic
+      - POSTGRES_DB=petclinic
+    profiles:
+      - postgres
+  spring-petclinic:
+    image: spring-petclinic:latest
+    container_name: spring_petclinic_app
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/petclinic  # If you're using MySQL
+      SPRING_DATASOURCE_USERNAME: petclinic
+      SPRING_DATASOURCE_PASSWORD: petclinic
+      SPRING_DATASOURCE_DRIVER_CLASS_NAME: com.mysql.cj.jdbc.Driver  # Use this for MySQL
+      SPRING_JPA_HIBERNATE_DDL_AUTO: update
+      SPRING_JPA_PROPERTIES_HIBERNATE_FORMAT_SQL: true
+    depends_on:
+      - mysql
+    ports:
+      - "8080:8080"
+    restart: always
+
+
+Run Docker Compose: After updating the docker-compose.yml file, we can run the following command to bring up the containers:
+
+docker-compose --profile mysql up -d
+
+**Docker - Practical task 2**
+**Uploading docker images to Nexus and ECR**
+
+**Create and configure docker repository in Nexus
+Upload spring-petclinic image to Nexus**
+
+On local machine where Docker is installed, log in to Nexus Docker repository:
+
+docker login localhost:8081
+
+Tag the image to match the Nexus repository:
+
+docker tag spring-petclinic localhost:8081/spring-petclinic:v1
+
+docker push <nexus-hostname>:<repository-port>/<image>:<tag>
+docker push localhost:8081/spring-petclinic:v1
+
+
+**Create and configure repository in ECR
+Upload spring-petclinic image to ECR**
+
+Log in to AWS Console or use the AWS CLI.
+Create an ECR Repository using AWS CLI
+aws ecr create-repository --repository-name spring-petclinic --region us-east-1 --output json
+Authenticate Docker to ECR
+  aws ecr get-login-password --region us-east-1 | docker login --username AWS     --password-stdin 905418392615.dkr.ecr.us-east-1.amazonaws.com
+Tag the Docker Image
+docker tag spring-petclinic:latest 905418392615.dkr.ecr.us-east-1.amazonaws.com/spring-petclinic:latest
+Push the Docker Image to ECR
+docker push 905418392615.dkr.ecr.us-east-1.amazonaws.com/spring-petclinic:latest
+Verify the Image in ECR
+aws ecr list-images --repository-name spring-petclinic --region us-east-1
+
+Perform security scan for uploaded images in ECR
+Get scan report
+Analyze results
+
+Scan the Image for Vulnerabilities
+aws ecr start-image-scan --repository-name spring-petclinic --image-id imageTag=latest --region us-east-1
+
+Get the Scan Report
+aws ecr describe-image-scan-findings --repository-name spring-petclinic --image-id imageTag=latest --region us-east-1
